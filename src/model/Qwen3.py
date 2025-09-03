@@ -1,9 +1,8 @@
 import torch
 import torch.nn as nn
-from os import path
 from typing import Optional, List
-from safetensors.torch import load_file
 from .Config import Qwen3Config
+from .BaseModel import BaseModel
 
 
 class Qwen3RMSNorm(nn.Module):
@@ -221,15 +220,25 @@ class Qwen3Attention(nn.Module):
         query = query_states.contiguous()
         key = key.contiguous()
         value = value.contiguous()
-        attn_output = torch.nn.functional.scaled_dot_product_attention(
-            query,
-            key,
-            value,
-            attn_mask=attention_mask,
-            dropout_p=self.attention_dropout,
-            scale=self.scaling,
-            is_causal=self.is_causal,
-        )
+        if self.is_causal:
+            attn_output = torch.nn.functional.scaled_dot_product_attention(
+                query,
+                key,
+                value,
+                dropout_p=self.attention_dropout,
+                scale=self.scaling,
+                is_causal=self.is_causal,
+            )
+        else:
+            attn_output = torch.nn.functional.scaled_dot_product_attention(
+                query,
+                key,
+                value,
+                attn_mask=attention_mask,
+                dropout_p=self.attention_dropout,
+                scale=self.scaling,
+                is_causal=self.is_causal,
+            )
         attn_output = attn_output.transpose(1, 2).contiguous()
 
         attn_output = attn_output.reshape(*input_shape, -1).contiguous()
@@ -400,17 +409,12 @@ class Qwen3Model(nn.Module):
     model.layers.0.self_attn.v_proj.weight torch.Size([1024, 1024])
     '''
 
-    @classmethod
-    def from_pretrained(cls, model_path, weight_dict=None):
-        config = Qwen3Config.from_pretrained(model_path)
-        if weight_dict is None:
-            weight_dict = load_file(path.join(model_path, "model.safetensors"))
-        model = cls(config)
-        model.embed_tokens.weight = assign(
-            model.embed_tokens.weight, weight_dict["model.embed_tokens.weight"])
-        model.norm.weight = assign(
-            model.norm.weight, weight_dict["model.norm.weight"])
-        for i, layer in enumerate(model.layers):
+    def load_weights(self, weight_dict):
+        self.embed_tokens.weight = assign(
+            self.embed_tokens.weight, weight_dict["model.embed_tokens.weight"])
+        self.norm.weight = assign(
+            self.norm.weight, weight_dict["model.norm.weight"])
+        for i, layer in enumerate(self.layers):
             layer.input_layernorm.weight = assign(
                 layer.input_layernorm.weight, weight_dict[f"model.layers.{i}.input_layernorm.weight"])
             layer.post_attention_layernorm.weight = assign(
@@ -433,7 +437,10 @@ class Qwen3Model(nn.Module):
                 layer.mlp.gate_proj.weight, weight_dict[f"model.layers.{i}.mlp.gate_proj.weight"])
             layer.mlp.up_proj.weight = assign(
                 layer.mlp.up_proj.weight, weight_dict[f"model.layers.{i}.mlp.up_proj.weight"])
-        return model
+
+    @classmethod
+    def get_model_config(cls, model_path):
+        return Qwen3Config.from_pretrained(model_path)
 
     def forward(
         self,
@@ -477,7 +484,7 @@ class Qwen3Model(nn.Module):
         return hidden_states, kv_cache
 
 
-class Qwen3ModelForCausalLM(nn.Module):
+class Qwen3ModelForCausalLM(BaseModel):
     def __init__(self, config):
         super().__init__()
         self.model = Qwen3Model(config)
@@ -491,7 +498,7 @@ class Qwen3ModelForCausalLM(nn.Module):
             position_ids: Optional[torch.LongTensor] = None,
             inputs_embeds: Optional[torch.FloatTensor] = None,
             kv_cache: Optional[List] = None,
-            prefill: bool = True):
+            is_prefill: bool = True):
         
         hidden_states, kv_cache = self.model(
             input_ids=input_ids,
@@ -499,21 +506,25 @@ class Qwen3ModelForCausalLM(nn.Module):
             position_ids=position_ids,
             inputs_embeds=inputs_embeds,
             kv_cache=kv_cache,
-            is_prefill=prefill,
+            is_prefill=is_prefill,
         )
         logits = self.lm_head(hidden_states)
         return logits, kv_cache
 
+    def get_input_embeddings(self,input_ids):
+        return self.model.embed_tokens(input_ids)
+
+    def set_input_embeddings(self, value):
+        self.model.embed_tokens = value
     @classmethod
-    def from_pretrained(cls, model_path, weight_dict=None):
-        config = Qwen3Config.from_pretrained(model_path)
-        if weight_dict is None:
-            weight_dict = load_file(path.join(model_path, "model.safetensors"))
-        model = cls(config)
-        model.model = Qwen3Model.from_pretrained(model_path, weight_dict)
-        model.lm_head.weight = assign(
-            model.lm_head.weight, weight_dict["lm_head.weight"])
-        return model
+    def get_model_config(cls, model_path):
+        return Qwen3Config.from_pretrained(model_path)
+    
+    def load_weights(self, weight_dict):
+        self.model.load_weights(weight_dict)
+        self.lm_head.weight = assign(
+            self.lm_head.weight, weight_dict["lm_head.weight"])
+
     def generate(
         self,
         input_ids: Optional[torch.LongTensor] = None,
@@ -537,14 +548,14 @@ class Qwen3ModelForCausalLM(nn.Module):
                 if step == 0:
                     logits, kv_cache = self.forward(
                         input_ids=input_ids,
-                        inputs_embeds=inputs_embeds,
+                        inputs_embeds = inputs_embeds,
                     )
                 else:
                     logits, kv_cache = self.forward(
                         input_ids=next_token,
-                        inputs_embeds=inputs_embeds,
-                        kv_cache=kv_cache,
-                        prefill=False,
+                        inputs_embeds = inputs_embeds,
+                        kv_cache = kv_cache,
+                        is_prefill = False,
                         position_ids=torch.tensor([[input_ids.shape[1]-1]], device=input_ids.device) # Update position_ids for next token
                     )
             else:

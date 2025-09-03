@@ -9,8 +9,7 @@ class BaseDataset(Dataset):
         self.tokenizer = tokenizer
         self.image_processor = image_processor
         self.mp_image_token_length = mp_image_token_length
-        self.image_token = "<|image_pad|>"
-
+        self.image_token = "<|vision_start|>"
         self.prefix_len = self._get_prefix_len()
 
     def __len__(self):
@@ -119,3 +118,5 @@ if __name__ == "__main__":
 
     dataset = VQADataset(data, tokenizer, image_processor, 64)
     print(dataset[0])
+
+    

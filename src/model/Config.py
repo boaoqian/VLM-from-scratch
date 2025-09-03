@@ -19,7 +19,7 @@ class Config:
         return cls(**cfg)
 
     def __str__(self):
-        return json.dumps(self.__dict__, indent=4)
+        return str(self.__dict__)
 
 
 class ViTConfig(Config):
@@ -126,13 +126,13 @@ class Qwen3VLConfig(Config):
     def __init__(
         self,
         r: int = 2,
-        vision_token: str = "<|image_pad|>",
+        vision_token_id: int = 151652,
         llm_config: Optional[dict] = {},
         vision_config: Optional[dict] = {},
         **kwargs
     ):
         self.r = r
-        self.vision_token = vision_token
+        self.vision_token_id = vision_token_id
         self.llm = Qwen3Config(**llm_config)
         self.vision = ViTConfig(**vision_config)
         super().__init__(**kwargs)

@@ -2,9 +2,8 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from safetensors.torch import load_file
+from .BaseModel import BaseModel
 from .Config import ViTConfig
-import os
 
 # https://github.com/huggingface/transformers/blob/main/src/transformers/models/siglip/modeling_siglip.py#L245
 class ViTPatchEmbeddings(nn.Module):
@@ -131,7 +130,7 @@ class ViTBlock(nn.Module):
         return x
     
 
-class ViT(nn.Module):
+class ViT(BaseModel):
     def __init__(self, cfg):
         super().__init__()
         self.cfg = cfg
@@ -170,13 +169,13 @@ class ViT(nn.Module):
         
         return x
     
-    # Load the model from a pretrained HuggingFace model (we don't want to have to train the Vision Backbone from scratch)
     @classmethod
-    def from_pretrained(cls, model_path, weight_dict=None):
-        safetensors_file = os.path.join(model_path, 'model.safetensors')
+    def get_model_config(cls, model_path):
         config = ViTConfig.from_pretrained(model_path)
-        model = cls(config)
-        sd = model.state_dict()
+        return config
+    
+    def load_weights(self, weight_dict: dict):
+        sd = self.state_dict()
         mapping = {
             'vision_model.embeddings.patch_embedding.weight': 'patch_embedding.conv.weight',
             'vision_model.embeddings.patch_embedding.bias': 'patch_embedding.conv.bias',
@@ -185,7 +184,7 @@ class ViT(nn.Module):
             'vision_model.post_layernorm.bias': 'layer_norm.bias',
         }
         
-        for i in range(config.num_hidden_layers):
+        for i in range(self.cfg.num_hidden_layers):
             # Layer norms
             mapping[f'vision_model.encoder.layers.{i}.layer_norm1.weight'] = f'blocks.{i}.ln1.weight'
             mapping[f'vision_model.encoder.layers.{i}.layer_norm1.bias'] = f'blocks.{i}.ln1.bias'
@@ -202,8 +201,6 @@ class ViT(nn.Module):
             mapping[f'vision_model.encoder.layers.{i}.self_attn.out_proj.weight'] = f'blocks.{i}.attn.out_proj.weight'
             mapping[f'vision_model.encoder.layers.{i}.self_attn.out_proj.bias'] = f'blocks.{i}.attn.out_proj.bias'
         
-        if weight_dict is None:
-            weight_dict = load_file(safetensors_file)
         for hf_key, our_key in mapping.items():
             if hf_key in weight_dict.keys() and our_key in sd:
                 tensor = weight_dict[hf_key]
@@ -221,7 +218,7 @@ class ViT(nn.Module):
                     print(f"Warning: Key {our_key} not found in model state dict")
         
         # Manually handle QKV concatenation since our implementation combines Q, K, V into one
-        for i in range(model.cfg.num_hidden_layers):
+        for i in range(self.cfg.num_hidden_layers):
             q_weight = weight_dict[f'vision_model.encoder.layers.{i}.self_attn.q_proj.weight']
             k_weight = weight_dict[f'vision_model.encoder.layers.{i}.self_attn.k_proj.weight']
             v_weight = weight_dict[f'vision_model.encoder.layers.{i}.self_attn.v_proj.weight']
@@ -236,33 +233,5 @@ class ViT(nn.Module):
             qkv_bias = torch.cat((q_bias, k_bias, v_bias), dim=0)
             sd[f'blocks.{i}.attn.qkv_proj.bias'].copy_(qkv_bias)
         
-        model.load_state_dict(sd)
-        print(f"Successfully loaded model from safetensors. Model has {sum(p.numel() for p in model.parameters()):,} parameters.")
-        return model
-
-
-"""
-hidden_size=768,
-intermediate_size=3072,
-num_hidden_layers=12,
-num_attention_heads=12,
-num_channels=3,
-image_size=224,
-patch_size=16,
-hidden_act="gelu_pytorch_tanh",
-layer_norm_eps=1e-6,
-attention_dropout=0.0
-"""
-
-# @dataclass
-# class ViTConfig:
-#     attention_dropout: int = 0.0
-#     hidden_size: int = 768
-#     intermediate_size: int = 4 * hidden_size
-#     patch_size: int = 16
-#     image_size: int = 224
-#     num_attention_heads: int = 12
-#     attention_dropout: float = 0.0
-#     num_hidden_layers: int = 12
-#     layer_norm_eps: float = 1e-6
-#     vit_cls_flag: bool = False
+        self.load_state_dict(sd)
+   
