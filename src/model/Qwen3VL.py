@@ -19,9 +19,12 @@ class Qwen3VL(BaseModel):
         super(Qwen3VL, self).__init__()
         self.config = config
         self.lm = Qwen3ModelForCausalLM(config.llm)
-        self.vit = ViT(config.vision)
+        self.vision_model = ViT(config.vision)
         self.modality_projector = ModalityProjector(config)
         self.vision_token_id = config.vision_token_id
+        self.lm.requires_grad_(False)
+        self.vision_model.requires_grad_(False)
+
 
     def forward(self,
                 input_ids: torch.LongTensor,
@@ -34,8 +37,8 @@ class Qwen3VL(BaseModel):
                 use_cache: Optional[bool] = False):
         # imgs: [batch, imgs]
         if isinstance(images, List):
-            imgs = torch.concatenate([img_list for img_list in images])
-        embs = self.vit(imgs)
+            imgs = torch.concatenate([img_list for img_list in images]).to(self.dtype)
+        embs = self.vision_model(imgs)
         embs = self.modality_projector(embs)
         input_embs = self.get_input_embeddings(input_ids, embs)
         logits, kv_cache = self.lm(inputs_embeds=input_embs,
@@ -51,6 +54,7 @@ class Qwen3VL(BaseModel):
         return {"logits":logits, "kv_cache":kv_cache}
         
 
+
     def get_input_embeddings(self, input_ids,
                              img_embs):
         token_embs = self.lm.get_input_embeddings(input_ids)
@@ -63,13 +67,7 @@ class Qwen3VL(BaseModel):
         return Qwen3VLConfig.from_pretrained(model_path)
     
     def load_weights(self, weight_dict):
-        lm_weight = {k[3:]: v for k, v in weight_dict.items() if k.startswith("lm.")}
-        vit_weight = {k[4:]: v for k, v in weight_dict.items() if k.startswith("vit.")}
-        self.lm.load_weights(lm_weight)
-        self.vit.load_weights(vit_weight)
-        self.modality_projector.projector.weight = assign(self.modality_projector.projector.weight, weight_dict["modality_projector.projector.weight"])
-        self.modality_projector.projector.bias = assign(self.modality_projector.projector.bias, weight_dict["modality_projector.projector.bias"])
-        
+        self.load_state_dict(weight_dict)
 
 
 class ModalityProjector(nn.Module):

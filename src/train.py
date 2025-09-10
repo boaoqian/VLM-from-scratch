@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import argparse
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from torch.nn import functional as F
@@ -14,18 +15,16 @@ from transformers import AutoTokenizer
 from tqdm import tqdm
 
 
-def init_model():
-    config = Qwen3VLConfig.from_pretrained("/media/qba/Data/Project/DeepLearning/Build VLM from scratch/src/Qwen3VL")
-    model = Qwen3VL(config)
-    vit_w = load_file("/media/qba/Data/Project/DeepLearning/Model/siglip-base-patch16-224/model.safetensors")
-    model.vit.load_weights(vit_w)
-    lm_w = load_file("/media/qba/Data/Project/DeepLearning/Model/Qwen3-0.6B/model.safetensors")
-    model.lm.load_weights(lm_w)
-    return model
+# def init_model():
+#     config = Qwen3VLConfig.from_pretrained("/media/qba/Data/Project/DeepLearning/Build VLM from scratch/src/Qwen3VL")
+#     model = Qwen3VL(config)
+#     vit_w = load_file("/media/qba/Data/Project/DeepLearning/Model/siglip-base-patch16-224/model.safetensors")
+#     model.vision_model.load_weights(vit_w)
+#     lm_w = load_file("/media/qba/Data/Project/DeepLearning/Model/Qwen3-0.6B/model.safetensors")
+#     model.lm.load_weights(lm_w)
+#     return model
 
-def get_dataloader(data):
-    #    data = load_dataset("parquet",data_files="/media/qba/Data/Project/DeepLearning/Dataset/the_cauldron/tqa/train-00000-of-00001-c15be8aed9c93862.parquet")["train"]
-    tokenizer = AutoTokenizer.from_pretrained("/media/qba/Data/Project/DeepLearning/Model/Qwen3-0.6B")
+def get_dataloader(data, tokenizer, batch_size=16, device="cuda", dtype="float32"):
     image_processor = transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.ToTensor(),
@@ -33,11 +32,11 @@ def get_dataloader(data):
     ])
 
     dataset = VQADataset(data, tokenizer, image_processor, 49)
-    collector = Collector(tokenizer.pad_token_id, "cuda")
-    data_loader = DataLoader(dataset, batch_size=16, collate_fn=collector)
+    collector = Collector(tokenizer.pad_token_id, device, dtype)
+    data_loader = DataLoader(dataset, batch_size=batch_size, collate_fn=collector)
     return data_loader
 
-def train(model, data, epoch, **kwargs):
+def train(model, tokenizer, data, epoch, batch_size, **kwargs):
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-5, weight_decay=0.01)
     writer = SummaryWriter()
     model.train()
@@ -47,7 +46,7 @@ def train(model, data, epoch, **kwargs):
     log_freq = 100
 
     for i in range(epoch):
-        data_loader = get_dataloader(data)
+        data_loader = get_dataloader(data, tokenizer, batch_size)
         for batch in tqdm(data_loader):
             outputs = model(**batch)
             loss = outputs["loss"]
@@ -88,6 +87,16 @@ def train(model, data, epoch, **kwargs):
 
 
 def main():
-    model = init_model()
-    data = load_dataset("parquet", data_files="/media/qba/Data/Project/DeepLearning/Dataset/the_cauldron/tqa/train-00000-of-00001-c15be8aed9c93862.parquet")["train"]
-    train(model, data, 10)
+    parser = argparse.ArgumentParser(description="training args")
+    parser.add_argument("--epoch", type=int, default=10)
+    parser.add_argument("--batch_size", type=int, default=16)
+    parser.add_argument("--data_path", type=str, default="/media/qba/Data/Project/DeepLearning/Dataset/the_cauldron/tqa/train-00000-of-00001-c15be8aed9c93862.parquet")
+    parser.add_argument("--model_path", type=str, default="/media/qba/Data/Project/DeepLearning/Build VLM from scratch/src/Qwen3VL")
+    args = parser.parse_args()
+
+    tokenizer = AutoTokenizer.from_pretrained(args.model_path)
+    model = Qwen3VL.from_pretrained(args.model_path).to("cuda")
+    data = load_dataset("parquet", data_files=args.data_path)["train"]
+    train(model, tokenizer, data, args.epoch, args.batch_size)
+
+main()

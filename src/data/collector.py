@@ -10,10 +10,11 @@ import torch
 '''
 
 class Collector:
-    def __init__(self, pad_token_id, device = "cpu", max_length=None):
+    def __init__(self, pad_token_id, device = "cpu", torch_type = torch.bfloat16, max_length=None):
         self.max_length = max_length
         self.pad_token_id = pad_token_id
         self.device = device
+        self.torch_type = torch_type
 
     def __call__(self, examples):
         batch = {"images":[],"input_ids":[],"attention_mask":[],"labels":[]}
@@ -21,7 +22,7 @@ class Collector:
             self.max_length = max(map(len, [d["input_ids"] for d in examples]))
 
         for data in examples:
-            batch["images"].append(torch.stack(data["images"]).to(self.device))
+            batch["images"].append(torch.stack(data["images"]).to(self.device).to(self.torch_type))
             batch["input_ids"].append(
                 torch.nn.functional.pad(data["input_ids"],(0, self.max_length-len(data["input_ids"])), "constant", self.pad_token_id
                 ))
