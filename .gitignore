@@ -1,3 +1,4 @@
 .vscode
+.idea
 src/runs
 src/Qwen3VL
